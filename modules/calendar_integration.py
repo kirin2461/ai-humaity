@@ -1,10 +1,17 @@
-"""Google Calendar интеграция"""
+"""Google Calendar интеграция с поддержкой timezone"""
 import os
 import json
 import datetime
+import logging
 from typing import Optional, List, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
+
+# Получаем timezone из переменных окружения
+DEFAULT_TIMEZONE = os.getenv('TIMEZONE', 'Europe/Moscow')
 
 
 @dataclass
@@ -16,12 +23,8 @@ class CalendarEvent:
     start: datetime.datetime
     end: datetime.datetime
     location: str = ""
-    attendees: List[str] = None
+    attendees: List[str] = field(default_factory=list)
     is_all_day: bool = False
-    
-    def __post_init__(self):
-        if self.attendees is None:
-            self.attendees = []
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -45,15 +48,12 @@ class CalendarConfig:
     """Конфигурация Google Calendar"""
     credentials_path: str = "config/google_credentials.json"
     token_path: str = "config/google_token.json"
-    scopes: List[str] = None
+    scopes: List[str] = field(default_factory=lambda: [
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events"
+    ])
     calendar_id: str = "primary"
-    
-    def __post_init__(self):
-        if self.scopes is None:
-            self.scopes = [
-                "https://www.googleapis.com/auth/calendar.readonly",
-                "https://www.googleapis.com/auth/calendar.events"
-            ]
+    timezone: str = field(default_factory=lambda: DEFAULT_TIMEZONE)
 
 
 class GoogleCalendarAPI:
@@ -74,21 +74,18 @@ class GoogleCalendarAPI:
             
             creds = None
             
-            # Проверяем существующий токен
             if os.path.exists(self.config.token_path):
                 creds = Credentials.from_authorized_user_file(
                     self.config.token_path, 
                     self.config.scopes
                 )
             
-            # Обновляем или получаем новый токен
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
                 else:
                     if not os.path.exists(self.config.credentials_path):
-                        print(f"[Calendar] Файл credentials не найден: {self.config.credentials_path}")
-                        print("[Calendar] Скачайте credentials.json из Google Cloud Console")
+                        logger.warning(f"Файл credentials не найден: {self.config.credentials_path}")
                         return False
                     
                     flow = InstalledAppFlow.from_client_secrets_file(
@@ -97,23 +94,20 @@ class GoogleCalendarAPI:
                     )
                     creds = flow.run_local_server(port=0)
                 
-                # Сохраняем токен
                 os.makedirs(os.path.dirname(self.config.token_path), exist_ok=True)
                 with open(self.config.token_path, 'w') as token:
                     token.write(creds.to_json())
             
-            # Создаём сервис
             self.service = build('calendar', 'v3', credentials=creds)
             self._is_authenticated = True
-            print("[Calendar] Аутентификация успешна!")
+            logger.info("Calendar аутентификация успешна!")
             return True
             
         except ImportError:
-            print("[Calendar] Не установлены зависимости.")
-            print("[Calendar] Выполните: pip install google-auth-oauthlib google-api-python-client")
+            logger.error("Не установлены зависимости для Google Calendar")
             return False
         except Exception as e:
-            print(f"[Calendar] Ошибка аутентификации: {e}")
+            logger.error(f"Ошибка аутентификации Calendar: {e}")
             return False
     
     def get_upcoming_events(self, max_results: int = 10, days_ahead: int = 7) -> List[CalendarEvent]:
@@ -123,9 +117,9 @@ class GoogleCalendarAPI:
                 return []
         
         try:
-            now = datetime.datetime.utcnow()
-            time_min = now.isoformat() + 'Z'
-            time_max = (now + datetime.timedelta(days=days_ahead)).isoformat() + 'Z'
+            now = datetime.datetime.now(datetime.timezone.utc)
+            time_min = now.isoformat()
+            time_max = (now + datetime.timedelta(days=days_ahead)).isoformat()
             
             events_result = self.service.events().list(
                 calendarId=self.config.calendar_id,
@@ -140,7 +134,7 @@ class GoogleCalendarAPI:
             return [self._parse_event(e) for e in events]
             
         except Exception as e:
-            print(f"[Calendar] Ошибка получения событий: {e}")
+            logger.error(f"Ошибка получения событий: {e}")
             return []
     
     def get_today_events(self) -> List[CalendarEvent]:
@@ -150,14 +144,14 @@ class GoogleCalendarAPI:
                 return []
         
         try:
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc)
             start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = start_of_day + datetime.timedelta(days=1)
             
             events_result = self.service.events().list(
                 calendarId=self.config.calendar_id,
-                timeMin=start_of_day.isoformat() + 'Z',
-                timeMax=end_of_day.isoformat() + 'Z',
+                timeMin=start_of_day.isoformat(),
+                timeMax=end_of_day.isoformat(),
                 singleEvents=True,
                 orderBy='startTime'
             ).execute()
@@ -166,7 +160,7 @@ class GoogleCalendarAPI:
             return [self._parse_event(e) for e in events]
             
         except Exception as e:
-            print(f"[Calendar] Ошибка получения событий: {e}")
+            logger.error(f"Ошибка получения событий: {e}")
             return []
     
     def create_event(
@@ -192,11 +186,11 @@ class GoogleCalendarAPI:
                 'location': location,
                 'start': {
                     'dateTime': start.isoformat(),
-                    'timeZone': 'Europe/Moscow',
+                    'timeZone': self.config.timezone,
                 },
                 'end': {
                     'dateTime': end.isoformat(),
-                    'timeZone': 'Europe/Moscow',
+                    'timeZone': self.config.timezone,
                 },
             }
             
@@ -205,11 +199,11 @@ class GoogleCalendarAPI:
                 body=event_body
             ).execute()
             
-            print(f"[Calendar] Создано событие: {title}")
+            logger.info(f"Создано событие: {title}")
             return self._parse_event(event)
             
         except Exception as e:
-            print(f"[Calendar] Ошибка создания события: {e}")
+            logger.error(f"Ошибка создания события: {e}")
             return None
     
     def delete_event(self, event_id: str) -> bool:
@@ -223,10 +217,10 @@ class GoogleCalendarAPI:
                 calendarId=self.config.calendar_id,
                 eventId=event_id
             ).execute()
-            print(f"[Calendar] Событие удалено: {event_id}")
+            logger.info(f"Событие удалено: {event_id}")
             return True
         except Exception as e:
-            print(f"[Calendar] Ошибка удаления события: {e}")
+            logger.error(f"Ошибка удаления события: {e}")
             return False
     
     def _parse_event(self, event_data: Dict) -> CalendarEvent:
@@ -234,7 +228,6 @@ class GoogleCalendarAPI:
         start_data = event_data.get('start', {})
         end_data = event_data.get('end', {})
         
-        # Определяем формат даты (весь день или конкретное время)
         is_all_day = 'date' in start_data
         
         if is_all_day:
@@ -243,14 +236,10 @@ class GoogleCalendarAPI:
         else:
             start_str = start_data.get('dateTime', '')
             end_str = end_data.get('dateTime', '')
-            # Убираем timezone info для простоты
             start = datetime.datetime.fromisoformat(start_str.replace('Z', '+00:00'))
             end = datetime.datetime.fromisoformat(end_str.replace('Z', '+00:00'))
         
-        attendees = [
-            a.get('email', '') 
-            for a in event_data.get('attendees', [])
-        ]
+        attendees = [a.get('email', '') for a in event_data.get('attendees', [])]
         
         return CalendarEvent(
             id=event_data.get('id', ''),
@@ -298,7 +287,6 @@ class CalendarManager:
         else:
             summary += "Сегодня событий нет\n"
         
-        # Фильтруем upcoming от сегодняшних
         today_ids = {e.id for e in today}
         upcoming_filtered = [e for e in upcoming if e.id not in today_ids]
         
@@ -319,9 +307,12 @@ class CalendarManager:
         now = datetime.datetime.now(datetime.timezone.utc)
         
         for event in self.api.get_today_events():
-            # Напоминание за 15 минут
-            time_until = (event.start.replace(tzinfo=datetime.timezone.utc) - now).total_seconds()
-            if 0 < time_until <= 900:  # 15 минут
+            event_start = event.start
+            if event_start.tzinfo is None:
+                event_start = event_start.replace(tzinfo=datetime.timezone.utc)
+            
+            time_until = (event_start - now).total_seconds()
+            if 0 < time_until <= 900:
                 minutes = int(time_until / 60)
                 reminders.append(f"⏰ Через {minutes} мин: {event.title}")
         
@@ -334,7 +325,6 @@ class CalendarManager:
         
         now = datetime.datetime.now()
         
-        # Простой парсинг времени
         if when == "tomorrow":
             start = now.replace(hour=10, minute=0, second=0) + datetime.timedelta(days=1)
         elif when == "today":
