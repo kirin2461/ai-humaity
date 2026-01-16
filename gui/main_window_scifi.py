@@ -9,6 +9,7 @@ from PyQt6.QtGui import QColor
 
 from .styles_scifi import SCIFI_STYLE
 from .skills_widget import SkillsWidget
+from .voice_dialog import VoiceDialog
 from modules.desktop_avatar import AvatarManager
 from modules.tts_engine import TTSManager, TTSConfig
 
@@ -84,6 +85,12 @@ class MainWindowSciFi(QMainWindow):
         voice_btn.clicked.connect(self._select_voice)
         voice_btn.setStyleSheet("font-size: 11px; padding: 8px;")
         left_layout.addWidget(voice_btn)
+
+                # Voice Library button
+        voice_library_btn = QPushButton("🎙️ БИБЛИОТЕКА ГОЛОСОВ")
+        voice_library_btn.clicked.connect(self._open_voice_library)
+        voice_library_btn.setStyleSheet("font-size: 11px; padding: 8px;")
+        left_layout.addWidget(voice_library_btn)
         
         upload_btn = QPushButton("⬆ ЗАГРУЗИТЬ МОДЕЛЬ")
         upload_btn.clicked.connect(self._select_model)
@@ -174,6 +181,22 @@ class MainWindowSciFi(QMainWindow):
                 self._add_message("SYSTEM", f"Загружен образец голоса: {Path(path).name}", "#4ecca3")
             else:
                 self._add_message("SYSTEM", "Сначала включите TTS", "#ffaa00")
+
+        def _open_voice_library(self):
+        """Открыть диалог библиотеки голосов"""
+        dialog = VoiceDialog(self)
+        dialog.voice_selected.connect(self._on_voice_selected)
+        dialog.exec()
+        
+    def _on_voice_selected(self, voice_id: str):
+        """Обработка выбора голоса из библиотеки"""
+        from modules.voice_manager import voice_manager
+        voice_path = voice_manager.get_voice_path(voice_id)
+        if voice_path and self.tts_manager.engine:
+            self.tts_manager.engine.set_speaker_voice(voice_path)
+            voice_data = voice_manager.metadata["voices"].get(voice_id, {})
+            name = voice_data.get("name", voice_id)
+            self._add_message("SYSTEM", f"Голос '{name}' установлен", "#4ecca3")
     
     def _select_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "Выбрать модель", "", "3D (*.vrm *.glb *.obj)")
