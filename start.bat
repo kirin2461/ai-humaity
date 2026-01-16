@@ -1,14 +1,14 @@
 @echo off
 setlocal enabledelayedexpansion
 
-title AI Humanity - Launcher v3.0
+title AI Humanity - Launcher v3.1
 color 0B
 
 echo.
-echo  ========================================
-echo     AI HUMANITY - Launcher v3.0
-echo     Requires Python 3.11 for Coqui TTS
-echo  ========================================
+echo ========================================
+echo    AI HUMANITY - Launcher v3.1
+echo    Requires Python 3.11 for Coqui TTS
+echo ========================================
 echo.
 
 :: Check for Python 3.11 specifically
@@ -50,7 +50,7 @@ if %errorlevel%==0 (
 
 :: Python 3.11 not found
 echo ==========================================
-echo  [ERROR] Python 3.11 is required!
+echo [ERROR] Python 3.11 is required!
 echo ==========================================
 echo.
 echo Coqui XTTS v2 (voice cloning) requires Python 3.10-3.11
@@ -61,7 +61,7 @@ echo 1. Download Python 3.11 from:
 echo    https://www.python.org/downloads/release/python-3119/
 echo.
 echo 2. During installation, CHECK:
-    echo    [x] Add Python 3.11 to PATH
+echo    [x] Add Python 3.11 to PATH
 echo    [x] Install py launcher
 echo.
 echo 3. If you have Python 3.13 installed:
@@ -83,18 +83,17 @@ echo [OK] Using: %PYTHON_CMD% (version %PYTHON_VERSION%)
 echo.
 
 :MENU
-echo  ========================================
-echo  Select action:
-echo  ========================================
+echo ========================================
+echo Select action:
+echo ========================================
 echo.
-echo   [1] Run application (Python)
-echo   [2] Build EXE (PyInstaller)
-echo   [3] Run EXE (if built)
-echo   [4] Install ALL dependencies
-echo   [5] Create virtual environment
-echo   [6] Exit
+echo [1] Run application (Python)
+echo [2] Build EXE (PyInstaller)
+echo [3] Run EXE (if built)
+echo [4] Install ALL dependencies
+echo [5] Create virtual environment
+echo [6] Exit
 echo.
-
 set /p choice="Your choice (1-6): "
 
 if "%choice%"=="1" goto RUN_PYTHON
@@ -131,41 +130,74 @@ echo.
 echo [INFO] Installing dependencies...
 echo.
 
-:: Activate venv if exists
-if exist "venv\Scripts\activate.bat" (
-    echo [INFO] Activating virtual environment...
-    call venv\Scripts\activate.bat
+:: Check if venv exists
+if not exist "venv\Scripts\python.exe" (
+    echo [WARNING] Virtual environment not found!
+    echo [INFO] Creating venv first...
+    %PYTHON_CMD% -m venv venv
+    if %errorlevel% NEQ 0 (
+        echo [ERROR] Failed to create venv
+        pause
+        goto :MENU
+    )
 )
 
+:: Use venv python directly
+set VENV_PYTHON=venv\Scripts\python.exe
+
 echo [1/5] Upgrading pip...
-%PYTHON_CMD% -m pip install --upgrade pip
+%VENV_PYTHON% -m pip install --upgrade pip
+if %errorlevel% NEQ 0 (
+    echo [ERROR] Failed to upgrade pip
+    pause
+    goto :MENU
+)
 
 echo.
 echo [2/5] Installing PyQt6...
-%PYTHON_CMD% -m pip install PyQt6>=6.5.0
+%VENV_PYTHON% -m pip install PyQt6
+if %errorlevel% NEQ 0 (
+    echo [WARNING] PyQt6 installation had issues, continuing...
+)
 
 echo.
 echo [3/5] Installing core dependencies...
-%PYTHON_CMD% -m pip install openai python-dotenv numpy requests pillow pygame
+%VENV_PYTHON% -m pip install openai python-dotenv numpy requests pillow pygame pyttsx3
+if %errorlevel% NEQ 0 (
+    echo [WARNING] Some core dependencies had issues, continuing...
+)
 
 echo.
 echo [4/5] Installing PyTorch (may take a while)...
-%PYTHON_CMD% -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+%VENV_PYTHON% -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+if %errorlevel% NEQ 0 (
+    echo [WARNING] PyTorch installation had issues
+    echo [INFO] Trying CPU-only version...
+    %VENV_PYTHON% -m pip install torch torchaudio
+)
 
 echo.
 echo [5/5] Installing Coqui TTS (voice cloning)...
-%PYTHON_CMD% -m pip install TTS>=0.22.0
+%VENV_PYTHON% -m pip install TTS
+if %errorlevel% NEQ 0 (
+    echo [WARNING] TTS installation had issues
+    echo [INFO] TTS requires Python 3.10-3.11
+)
 
 echo.
-echo [INFO] Installing remaining dependencies...
+echo [INFO] Installing remaining dependencies from requirements.txt...
 if exist requirements.txt (
-    %PYTHON_CMD% -m pip install -r requirements.txt
+    %VENV_PYTHON% -m pip install -r requirements.txt
 )
 
 echo.
 echo ==========================================
-echo [OK] All dependencies installed!
+echo [OK] Dependencies installation complete!
 echo ==========================================
+echo.
+echo NOTE: If you see errors above, some packages
+echo may not have installed correctly.
+echo.
 pause
 goto :MENU
 
@@ -174,12 +206,13 @@ echo.
 echo [INFO] Starting AI Humanity...
 echo.
 
-:: Activate venv if exists
-if exist "venv\Scripts\activate.bat" (
-    call venv\Scripts\activate.bat
+:: Use venv python if exists
+if exist "venv\Scripts\python.exe" (
+    venv\Scripts\python.exe main.py
+) else (
+    %PYTHON_CMD% main.py
 )
 
-%PYTHON_CMD% main.py
 if errorlevel 1 (
     echo.
     echo [ERROR] Application crashed or error occurred.
@@ -197,15 +230,21 @@ goto :MENU
 echo.
 echo [INFO] Building EXE with PyInstaller...
 echo.
-if exist "venv\Scripts\activate.bat" (
-    call venv\Scripts\activate.bat
+
+if exist "venv\Scripts\python.exe" (
+    set BUILD_PYTHON=venv\Scripts\python.exe
+) else (
+    set BUILD_PYTHON=%PYTHON_CMD%
 )
-%PYTHON_CMD% -m pip install pyinstaller --quiet
+
+%BUILD_PYTHON% -m pip install pyinstaller --quiet
+
 if exist build.bat (
     call build.bat
 ) else (
-    %PYTHON_CMD% -m PyInstaller --onefile --windowed --name=AI_Humanity main.py
+    %BUILD_PYTHON% -m PyInstaller --onefile --windowed --name=AI_Humanity main.py
 )
+
 echo.
 echo [INFO] Build complete! Check dist folder.
 pause
