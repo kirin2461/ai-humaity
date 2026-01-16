@@ -3,9 +3,7 @@
 Supports:
 - Coqui XTTS v2 (Python 3.9-3.11, with voice cloning)
 - pyttsx3 (Python 3.12+, basic TTS)
-- gTTS (Google TTS, requires internet)
 """
-
 import os
 import sys
 import threading
@@ -35,7 +33,6 @@ class TTSStatus(Enum):
 class TTSBackend(Enum):
     COQUI = "coqui"      # Coqui XTTS v2 (Python 3.9-3.11)
     PYTTSX3 = "pyttsx3"  # Offline, system voices
-    GTTS = "gtts"        # Google TTS (online)
     NONE = "none"        # No TTS available
 
 
@@ -67,7 +64,7 @@ class TTSEngine:
         self._status = status
         if self._status_callback:
             self._status_callback(status)
-            
+        
     def set_status_callback(self, callback: Callable):
         self._status_callback = callback
         
@@ -93,10 +90,6 @@ class TTSEngine:
             
         # Fallback to pyttsx3 (offline, works on Python 3.12+)
         if self._try_init_pyttsx3():
-            return True
-            
-        # Fallback to gTTS (requires internet)
-        if self._try_init_gtts():
             return True
             
         logger.error("No TTS backend available!")
@@ -158,24 +151,6 @@ class TTSEngine:
             logger.warning(f"pyttsx3 init failed: {e}")
         return False
         
-    def _try_init_gtts(self) -> bool:
-        """Try to initialize gTTS (requires internet)"""
-        try:
-            from gtts import gTTS
-            
-            # Test that gTTS works
-            self._backend = TTSBackend.GTTS
-            self._is_initialized = True
-            self._update_status(TTSStatus.IDLE)
-            logger.info("gTTS initialized successfully")
-            return True
-            
-        except ImportError:
-            logger.info("gTTS not installed")
-        except Exception as e:
-            logger.warning(f"gTTS init failed: {e}")
-        return False
-        
     def synthesize(self, text: str, output_path: str = None) -> Optional[str]:
         """Synthesize speech from text"""
         if not self._is_initialized:
@@ -192,8 +167,6 @@ class TTSEngine:
                 return self._synth_coqui(text, output_path)
             elif self._backend == TTSBackend.PYTTSX3:
                 return self._synth_pyttsx3(text, output_path)
-            elif self._backend == TTSBackend.GTTS:
-                return self._synth_gtts(text, output_path)
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
             self._update_status(TTSStatus.ERROR)
@@ -223,19 +196,6 @@ class TTSEngine:
         self._engine.runAndWait()
         self._update_status(TTSStatus.IDLE)
         return output_path
-        
-    def _synth_gtts(self, text: str, output_path: str) -> str:
-        """Synthesize using gTTS"""
-        from gtts import gTTS
-        
-        lang = 'ru' if self.config.language == 'ru' else 'en'
-        tts = gTTS(text=text, lang=lang)
-        
-        # gTTS saves as MP3, convert path
-        mp3_path = output_path.replace('.wav', '.mp3')
-        tts.save(mp3_path)
-        self._update_status(TTSStatus.IDLE)
-        return mp3_path
         
     def speak(self, text: str):
         """Synthesize and play speech"""
@@ -297,7 +257,6 @@ class TTSEngine:
         info = {
             TTSBackend.COQUI: "Coqui XTTS v2 (voice cloning supported)",
             TTSBackend.PYTTSX3: "pyttsx3 (offline, system voices)",
-            TTSBackend.GTTS: "Google TTS (online, requires internet)",
             TTSBackend.NONE: "No TTS backend available"
         }
         return info.get(self._backend, "Unknown")
@@ -305,6 +264,7 @@ class TTSEngine:
 
 # Global instance
 _tts_engine: Optional[TTSEngine] = None
+
 
 def get_tts_engine() -> TTSEngine:
     """Get or create global TTS engine instance"""
