@@ -6,6 +6,7 @@ import tempfile
 import wave
 import logging
 from pathlib import Path
+from .voice_manager import voice_manager
 from typing import Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -127,6 +128,9 @@ class TTSEngine:
             self._is_initialized = True
             self._update_status(TTSStatus.IDLE)
             logger.info(f"TTS модель загружена успешно на {self._device}!")
+
+                        # Загрузка голоса по умолчанию из библиотеки
+            self._load_default_voice()
             return True
             
         except ImportError:
@@ -291,6 +295,18 @@ class TTSEngine:
             logger.info(f"Установлен образец голоса: {wav_path}")
         else:
             logger.warning(f"Файл не найден: {wav_path}")
+
+        def _load_default_voice(self):
+        """Загрузка голоса по умолчанию из библиотеки голосов"""
+        try:
+            default_voice = voice_manager.get_default_voice()
+            if default_voice:
+                voice_path = default_voice.get('file')
+                if voice_path and os.path.exists(voice_path):
+                    self.set_speaker_voice(voice_path)
+                    logger.info(f"Загружен голос по умолчанию: {default_voice.get('name')}")
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить голос по умолчанию: {e}")
     
     def set_language(self, language: str):
         """Установить язык синтеза"""
