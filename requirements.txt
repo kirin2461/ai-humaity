@@ -1,17 +1,32 @@
+# === Основные зависимости ===
 openai>=1.0.0
 python-dotenv>=1.0.0
 numpy>=1.24.0
+requests>=2.31.0
+
+# === GUI (PyQt6) ===
 PyQt6>=6.5.0
+
+# === 3D Аватар ===
 trimesh>=4.0.0
 pygltflib>=1.16.0
 PyOpenGL>=3.1.7
-requests>=2.31.0
 pillow>=10.0.0
 
-# TTS - Coqui XTTS v2
+# === TTS - Coqui XTTS v2 ===
 TTS>=0.22.0
 torch>=2.0.0
 torchaudio>=2.0.0
-
-# Audio playback (optional, fallback methods available)
 pygame>=2.5.0
+
+# === Telegram Bot ===
+python-telegram-bot>=20.0
+
+# === Face Emotion Recognition ===
+fer>=22.5.0
+opencv-python>=4.8.0
+tensorflow>=2.13.0
+
+# === Google Calendar ===
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.100.0
