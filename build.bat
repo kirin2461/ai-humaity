@@ -1,108 +1,88 @@
 @echo off
-chcp 65001 >nul
+setlocal enabledelayedexpansion
+
 title AI Humanity - Build EXE
 color 0A
 
-echo ========================================
-echo    AI Humanity - Сборка EXE файла
-echo ========================================
+echo ==========================================
+echo    AI Humanity - EXE Builder
+echo ==========================================
 echo.
 
-:: Проверка Python
-where python >nul 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [ОШИБКА] Python не найден!
-    echo Установите Python 3.10+ с python.org
-    pause
-    exit /b 1
+:: Find Python
+set PYTHON_CMD=
+
+where python >nul 2>&1
+if %errorlevel%==0 (
+    set PYTHON_CMD=python
+    goto :FOUND_PYTHON
 )
 
-echo [1/5] Проверка Python...
-python --version
+where py >nul 2>&1
+if %errorlevel%==0 (
+    set PYTHON_CMD=py
+    goto :FOUND_PYTHON
+)
+
+echo [ERROR] Python not found!
+echo Please install Python from https://python.org
+pause
+exit /b 1
+
+:FOUND_PYTHON
+echo [1/5] Checking Python...
+%PYTHON_CMD% --version
 echo.
 
-:: Проверка/создание виртуального окружения
+:: Check/create virtual environment
 if not exist "venv" (
-    echo [2/5] Создание виртуального окружения...
-    python -m venv venv
-    if %ERRORLEVEL% NEQ 0 (
-        echo [ОШИБКА] Не удалось создать venv
+    echo [2/5] Creating virtual environment...
+    %PYTHON_CMD% -m venv venv
+    if %errorlevel% NEQ 0 (
+        echo [ERROR] Failed to create venv
         pause
         exit /b 1
     )
 ) else (
-    echo [2/5] Виртуальное окружение найдено
+    echo [2/5] Virtual environment found
 )
 echo.
 
-:: Активация venv
+:: Activate venv
+echo [3/5] Activating virtual environment...
 call venv\Scripts\activate.bat
+echo.
 
-:: Установка зависимостей
-echo [3/5] Установка зависимостей...
-pip install --upgrade pip >nul 2>nul
-pip install -r requirements.txt >nul 2>nul
-pip install pyinstaller >nul 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [ОШИБКА] Не удалось установить зависимости
-    pause
-    exit /b 1
+:: Install dependencies
+echo [4/5] Installing dependencies...
+pip install --upgrade pip --quiet
+if exist requirements.txt (
+    pip install -r requirements.txt --quiet
 )
-echo Зависимости установлены
+pip install pyinstaller --quiet
 echo.
 
-:: Создание директории для сборки
-if not exist "dist" mkdir dist
-if not exist "build" mkdir build
-
-:: Сборка EXE
-echo [4/5] Сборка EXE файла...
-echo Это может занять несколько минут...
+:: Build EXE
+echo [5/5] Building EXE with PyInstaller...
 echo.
 
-pyinstaller --noconfirm --onefile --windowed ^
-    --name "AI_Humanity" ^
-    --icon "assets\icon.ico" ^
-    --add-data "config;config" ^
-    --add-data "core;core" ^
-    --add-data "gui;gui" ^
-    --add-data "modules;modules" ^
-    --add-data ".env.example;." ^
-    --hidden-import "PyQt6" ^
-    --hidden-import "PyQt6.QtWidgets" ^
-    --hidden-import "PyQt6.QtCore" ^
-    --hidden-import "PyQt6.QtGui" ^
-    --hidden-import "openai" ^
-    --hidden-import "TTS" ^
-    --hidden-import "torch" ^
-    --collect-all "TTS" ^
-    main.py
+if exist "dist" rmdir /s /q dist
+if exist "build" rmdir /s /q build
+if exist "*.spec" del /q *.spec
 
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo [ОШИБКА] Сборка не удалась!
-    echo Проверьте логи выше для диагностики
-    pause
-    exit /b 1
+pyinstaller --onefile --windowed --name=AI_Humanity --icon=assets/icon.ico main.py 2>nul
+if %errorlevel% NEQ 0 (
+    pyinstaller --onefile --windowed --name=AI_Humanity main.py
 )
 
 echo.
-echo [5/5] Сборка завершена!
-echo.
-echo ========================================
-echo    EXE файл создан: dist\AI_Humanity.exe
-echo ========================================
-echo.
-
-:: Копируем конфигурацию рядом с exe
+echo ==========================================
 if exist "dist\AI_Humanity.exe" (
-    copy ".env.example" "dist\.env.example" >nul 2>nul
-    echo Скопирован .env.example в dist\
+    echo [SUCCESS] Build complete!
+    echo EXE file: dist\AI_Humanity.exe
+) else (
+    echo [ERROR] Build failed!
 )
-
-echo.
-echo Для запуска выполните: dist\AI_Humanity.exe
-echo Не забудьте создать .env файл с вашими API ключами!
-echo.
+echo ==========================================
 
 pause
