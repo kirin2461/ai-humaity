@@ -22,7 +22,6 @@ pillow>=10.0.0
 #
 # For Python 3.12+ (basic TTS, no cloning):
 pyttsx3>=2.90
-gTTS>=2.4.0
 
 # === Audio ===
 torch>=2.0.0
