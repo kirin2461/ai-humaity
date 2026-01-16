@@ -1,13 +1,22 @@
-"""Coqui XTTS v2 - Синтез речи"""
+"""Coqui XTTS v2 - Синтез речи с улучшенной поддержкой CUDA"""
 import os
 import threading
 import queue
 import tempfile
 import wave
+import logging
 from pathlib import Path
 from typing import Optional, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
+
+# Конфигурация из переменных окружения
+TTS_USE_GPU = os.getenv('TTS_USE_GPU', 'true').lower() in ('true', '1', 'yes')
+TTS_LANGUAGE = os.getenv('TTS_LANGUAGE', 'ru')
+TTS_SPEED = float(os.getenv('TTS_SPEED', '1.0'))
 
 
 class TTSStatus(Enum):
@@ -22,12 +31,33 @@ class TTSStatus(Enum):
 class TTSConfig:
     """Конфигурация TTS"""
     model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
-    language: str = "ru"
-    speaker_wav: Optional[str] = None  # Путь к образцу голоса для клонирования
-    use_gpu: bool = True
-    speed: float = 1.0
+    language: str = field(default_factory=lambda: TTS_LANGUAGE)
+    speaker_wav: Optional[str] = None
+    use_gpu: bool = field(default_factory=lambda: TTS_USE_GPU)
+    speed: float = field(default_factory=lambda: TTS_SPEED)
     temperature: float = 0.7
     output_dir: str = "temp_audio"
+
+
+def check_cuda_available() -> tuple[bool, str]:
+    """Проверка доступности CUDA с диагностикой"""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False, "CUDA недоступна (torch.cuda.is_available() = False)"
+        
+        device_count = torch.cuda.device_count()
+        if device_count == 0:
+            return False, "Не найдено CUDA устройств"
+        
+        device_name = torch.cuda.get_device_name(0)
+        memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        
+        return True, f"CUDA доступна: {device_name} ({memory:.1f} GB)"
+    except ImportError:
+        return False, "PyTorch не установлен"
+    except Exception as e:
+        return False, f"Ошибка проверки CUDA: {e}"
 
 
 class TTSEngine:
@@ -42,8 +72,8 @@ class TTSEngine:
         self._stop_playback = False
         self._is_initialized = False
         self._on_status_change: Optional[Callable[[TTSStatus], None]] = None
+        self._device = "cpu"
         
-        # Создаём директорию для временных файлов
         os.makedirs(self.config.output_dir, exist_ok=True)
     
     def set_status_callback(self, callback: Callable[[TTSStatus], None]):
@@ -67,26 +97,44 @@ class TTSEngine:
             from TTS.api import TTS
             import torch
             
-            # Определяем устройство
-            device = "cuda" if self.config.use_gpu and torch.cuda.is_available() else "cpu"
+            # Проверяем CUDA
+            cuda_available, cuda_info = check_cuda_available()
+            logger.info(f"CUDA: {cuda_info}")
             
-            print(f"[TTS] Загрузка модели {self.config.model_name}...")
-            print(f"[TTS] Устройство: {device}")
+            if self.config.use_gpu and cuda_available:
+                self._device = "cuda"
+                logger.info("Используется GPU для TTS")
+            else:
+                self._device = "cpu"
+                if self.config.use_gpu and not cuda_available:
+                    logger.warning(f"GPU запрошен, но недоступен: {cuda_info}")
+                logger.info("Используется CPU для TTS")
             
-            # Загружаем модель
-            self.tts = TTS(model_name=self.config.model_name).to(device)
+            logger.info(f"Загрузка модели {self.config.model_name}...")
+            
+            # Загружаем модель с обработкой ошибок памяти
+            try:
+                self.tts = TTS(model_name=self.config.model_name).to(self._device)
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower() and self._device == "cuda":
+                    logger.warning("Недостаточно памяти GPU, переключение на CPU...")
+                    torch.cuda.empty_cache()
+                    self._device = "cpu"
+                    self.tts = TTS(model_name=self.config.model_name).to(self._device)
+                else:
+                    raise
             
             self._is_initialized = True
             self._update_status(TTSStatus.IDLE)
-            print("[TTS] Модель загружена успешно!")
+            logger.info(f"TTS модель загружена успешно на {self._device}!")
             return True
             
         except ImportError:
-            print("[TTS] ОШИБКА: TTS не установлен. Выполните: pip install TTS")
+            logger.error("TTS не установлен. Выполните: pip install TTS")
             self._update_status(TTSStatus.ERROR)
             return False
         except Exception as e:
-            print(f"[TTS] ОШИБКА инициализации: {e}")
+            logger.error(f"Ошибка инициализации TTS: {e}")
             self._update_status(TTSStatus.ERROR)
             return False
     
@@ -102,14 +150,12 @@ class TTSEngine:
         self._update_status(TTSStatus.GENERATING)
         
         try:
-            # Генерируем путь для выходного файла
             if output_path is None:
                 output_path = os.path.join(
                     self.config.output_dir,
                     f"speech_{hash(text) & 0xFFFFFFFF}.wav"
                 )
             
-            # Параметры генерации
             kwargs = {
                 "text": text,
                 "file_path": output_path,
@@ -117,18 +163,17 @@ class TTSEngine:
                 "speed": self.config.speed,
             }
             
-            # Если есть образец голоса для клонирования
             if self.config.speaker_wav and os.path.exists(self.config.speaker_wav):
                 kwargs["speaker_wav"] = self.config.speaker_wav
             
-            # Генерация
             self.tts.tts_to_file(**kwargs)
             
             self._update_status(TTSStatus.IDLE)
+            logger.debug(f"Синтез завершён: {output_path}")
             return output_path
             
         except Exception as e:
-            print(f"[TTS] ОШИБКА синтеза: {e}")
+            logger.error(f"Ошибка синтеза: {e}")
             self._update_status(TTSStatus.ERROR)
             return None
     
@@ -180,7 +225,6 @@ class TTSEngine:
         self._update_status(TTSStatus.PLAYING)
         
         try:
-            # Пробуем разные методы воспроизведения
             if self._try_pygame(audio_path):
                 pass
             elif self._try_playsound(audio_path):
@@ -188,7 +232,7 @@ class TTSEngine:
             elif self._try_system_player(audio_path):
                 pass
             else:
-                print(f"[TTS] Аудио сохранено: {audio_path}")
+                logger.info(f"Аудио сохранено: {audio_path}")
         finally:
             self._update_status(TTSStatus.IDLE)
     
@@ -202,7 +246,7 @@ class TTSEngine:
             while pygame.mixer.music.get_busy():
                 pygame.time.Clock().tick(10)
             return True
-        except:
+        except Exception:
             return False
     
     def _try_playsound(self, audio_path: str) -> bool:
@@ -211,7 +255,7 @@ class TTSEngine:
             from playsound import playsound
             playsound(audio_path)
             return True
-        except:
+        except Exception:
             return False
     
     def _try_system_player(self, audio_path: str) -> bool:
@@ -223,12 +267,12 @@ class TTSEngine:
             system = platform.system()
             if system == "Windows":
                 os.startfile(audio_path)
-            elif system == "Darwin":  # macOS
+            elif system == "Darwin":
                 subprocess.run(["afplay", audio_path])
-            else:  # Linux
+            else:
                 subprocess.run(["aplay", audio_path])
             return True
-        except:
+        except Exception:
             return False
     
     def stop(self):
@@ -237,25 +281,25 @@ class TTSEngine:
         try:
             import pygame
             pygame.mixer.music.stop()
-        except:
+        except Exception:
             pass
     
     def set_speaker_voice(self, wav_path: str):
         """Установить образец голоса для клонирования"""
         if os.path.exists(wav_path):
             self.config.speaker_wav = wav_path
-            print(f"[TTS] Установлен образец голоса: {wav_path}")
+            logger.info(f"Установлен образец голоса: {wav_path}")
         else:
-            print(f"[TTS] Файл не найден: {wav_path}")
+            logger.warning(f"Файл не найден: {wav_path}")
     
     def set_language(self, language: str):
         """Установить язык синтеза"""
         supported = ["ru", "en", "es", "fr", "de", "it", "pt", "pl", "tr", "nl", "cs", "ar", "zh-cn", "ja", "ko"]
         if language in supported:
             self.config.language = language
-            print(f"[TTS] Язык: {language}")
+            logger.info(f"Язык TTS: {language}")
         else:
-            print(f"[TTS] Неподдерживаемый язык: {language}. Доступны: {supported}")
+            logger.warning(f"Неподдерживаемый язык: {language}. Доступны: {supported}")
     
     def set_speed(self, speed: float):
         """Установить скорость речи (0.5 - 2.0)"""
@@ -267,9 +311,13 @@ class TTSEngine:
             import shutil
             if os.path.exists(self.config.output_dir):
                 shutil.rmtree(self.config.output_dir)
-                os.makedirs(self.config.output_dir, exist_ok=True)
+            os.makedirs(self.config.output_dir, exist_ok=True)
         except Exception as e:
-            print(f"[TTS] Ошибка очистки: {e}")
+            logger.error(f"Ошибка очистки TTS: {e}")
+    
+    def get_device_info(self) -> str:
+        """Получить информацию об устройстве"""
+        return f"TTS device: {self._device}"
 
 
 class TTSManager:
@@ -290,7 +338,6 @@ class TTSManager:
     def on_response(self, response: str):
         """Озвучить ответ AI"""
         if self.enabled and self.engine:
-            # Очищаем текст от эмодзи и спецсимволов для лучшего синтеза
             clean_text = self._clean_text(response)
             if clean_text:
                 self.engine.speak_async(clean_text)
@@ -298,7 +345,6 @@ class TTSManager:
     def _clean_text(self, text: str) -> str:
         """Очистка текста для синтеза"""
         import re
-        # Убираем эмодзи
         emoji_pattern = re.compile("["
             u"\U0001F600-\U0001F64F"
             u"\U0001F300-\U0001F5FF"
@@ -308,7 +354,6 @@ class TTSManager:
             u"\U000024C2-\U0001F251"
             "]+", flags=re.UNICODE)
         text = emoji_pattern.sub('', text)
-        # Убираем лишние пробелы
         text = re.sub(r'\s+', ' ', text).strip()
         return text
     
