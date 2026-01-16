@@ -183,3 +183,39 @@ MIT License
 - [Coqui TTS](https://github.com/coqui-ai/TTS) — XTTS v2
 - [FER](https://github.com/justinshenk/fer) — Face Emotion Recognition
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot)
+
+---
+
+## 📦 Сборка EXE
+
+### Используя start.bat:
+```bash
+# Запустите start.bat и выберите опцию [2]
+start.bat
+# Выберите: 2 - Собрать EXE
+```
+
+### Или вручную:
+```bash
+pip install pyinstaller
+build.bat
+# Или:
+pyinstaller --onefile --windowed --icon=assets/icon.ico --name=AI_Humanity main.py
+```
+
+Собранный EXE будет в папке `dist/`
+
+---
+
+## 🔊 Дополнительный TTS модуль
+
+Файл `tts_module.py` в корне проекта - альтернативный модуль TTS:
+
+```python
+from tts_module import TTSModule
+
+tts = TTSModule()
+tts.load_model()  # Загрузка XTTS v2
+tts.speak("Привет, мир!")  # Синтез и воспроизведение
+tts.cleanup()  # Очистка
+```
