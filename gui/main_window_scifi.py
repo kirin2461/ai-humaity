@@ -2,13 +2,15 @@
 import html
 from pathlib import Path
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLineEdit, QPushButton, QLabel, QProgressBar, QFrame, QFileDialog)
+    QTextEdit, QLineEdit, QPushButton, QLabel, QProgressBar, QFrame, QFileDialog,
+    QCheckBox)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QColor
 
 from .styles_scifi import SCIFI_STYLE
 from .skills_widget import SkillsWidget
 from modules.desktop_avatar import AvatarManager
+from modules.tts_engine import TTSManager, TTSConfig
 
 class AIWorker(QThread):
     response_ready = pyqtSignal(str)
@@ -23,6 +25,7 @@ class MainWindowSciFi(QMainWindow):
         super().__init__()
         self.cognitive = cognitive
         self.avatar_manager = AvatarManager(cognitive)
+        self.tts_manager = TTSManager(cognitive)
         self.setWindowTitle("◆ AI HUMANITY ◆")
         self.setMinimumSize(1000, 700)
         self._setup_ui()
@@ -65,6 +68,22 @@ class MainWindowSciFi(QMainWindow):
             left_layout.addWidget(bar)
         
         left_layout.addStretch()
+        
+        # TTS Toggle
+        self.tts_checkbox = QCheckBox("🔊 Озвучка (XTTS v2)")
+        self.tts_checkbox.setStyleSheet("color: #00d4ff; font-size: 12px;")
+        self.tts_checkbox.stateChanged.connect(self._toggle_tts)
+        left_layout.addWidget(self.tts_checkbox)
+        
+        self.tts_status = QLabel("TTS: Выключен")
+        self.tts_status.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
+        left_layout.addWidget(self.tts_status)
+        
+        # Voice sample button
+        voice_btn = QPushButton("🎤 ЗАГРУЗИТЬ ГОЛОС")
+        voice_btn.clicked.connect(self._select_voice)
+        voice_btn.setStyleSheet("font-size: 11px; padding: 8px;")
+        left_layout.addWidget(voice_btn)
         
         upload_btn = QPushButton("⬆ ЗАГРУЗИТЬ МОДЕЛЬ")
         upload_btn.clicked.connect(self._select_model)
@@ -111,6 +130,51 @@ class MainWindowSciFi(QMainWindow):
         
         main.addWidget(right)
     
+    def _toggle_tts(self, state):
+        """Включить/выключить TTS"""
+        if state == Qt.CheckState.Checked.value:
+            self.tts_status.setText("TTS: Загрузка модели...")
+            self.tts_status.setStyleSheet("color: #ffaa00; font-size: 10px;")
+            # Инициализация в отдельном потоке
+            self._init_tts_async()
+        else:
+            self.tts_manager.enabled = False
+            self.tts_status.setText("TTS: Выключен")
+            self.tts_status.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
+    
+    def _init_tts_async(self):
+        """Асинхронная инициализация TTS"""
+        import threading
+        def init():
+            success = self.tts_manager.initialize()
+            # Обновляем UI из главного потока
+            QTimer.singleShot(0, lambda: self._on_tts_init(success))
+        threading.Thread(target=init, daemon=True).start()
+    
+    def _on_tts_init(self, success: bool):
+        """Callback после инициализации TTS"""
+        if success:
+            self.tts_status.setText("TTS: Активен ✓")
+            self.tts_status.setStyleSheet("color: #4ecca3; font-size: 10px;")
+        else:
+            self.tts_checkbox.setChecked(False)
+            self.tts_status.setText("TTS: Ошибка загрузки")
+            self.tts_status.setStyleSheet("color: #ff006e; font-size: 10px;")
+            self._add_message("SYSTEM", "Не удалось загрузить TTS. Установите: pip install TTS torch", "#ff006e")
+    
+    def _select_voice(self):
+        """Выбрать образец голоса для клонирования"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выбрать образец голоса", "", 
+            "Audio (*.wav *.mp3 *.ogg *.flac)"
+        )
+        if path:
+            if self.tts_manager.engine:
+                self.tts_manager.engine.set_speaker_voice(path)
+                self._add_message("SYSTEM", f"Загружен образец голоса: {Path(path).name}", "#4ecca3")
+            else:
+                self._add_message("SYSTEM", "Сначала включите TTS", "#ffaa00")
+    
     def _select_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "Выбрать модель", "", "3D (*.vrm *.glb *.obj)")
         if path:
@@ -133,6 +197,8 @@ class MainWindowSciFi(QMainWindow):
         self._add_message("AI", response, "#ff006e")
         self.skills_widget.refresh()
         self.avatar_manager.on_response(response)
+        # Озвучиваем ответ если TTS включён
+        self.tts_manager.on_response(response)
         self.worker.deleteLater()
     
     def _add_message(self, sender: str, text: str, color: str):
@@ -147,3 +213,10 @@ class MainWindowSciFi(QMainWindow):
         self.a_bar.setValue(int(state['pad']['arousal'] * 100))
         self.d_bar.setValue(int(state['pad']['dominance'] * 100))
         self.level_label.setText(f"LVL {state['total_level']}")
+    
+    def closeEvent(self, event):
+        """Очистка при закрытии"""
+        self.tts_manager.stop()
+        if self.tts_manager.engine:
+            self.tts_manager.engine.cleanup()
+        super().closeEvent(event)
